@@ -29,7 +29,13 @@
   * **問題 2（Windows Access Denied 5 阻斷）**：當加入真實座標檢查後，發現 `SendInput` 回傳 0 且錯誤碼為 `ERROR_ACCESS_DENIED (5)`，背景進程無權控制游標！
   * **根本原因**：Windows 核心安全機制將背景進程隔離於非互動式桌面，除非將線程附加至活動輸入桌面（Input Desktop），否則所有輸入注入與游標讀取均被物理攔截。
   * **避坑解法**：在 C# 原生宿主每次注入前調用 `OpenInputDesktop(0, false, GENERIC_ALL)` 與 `SetThreadDesktop(hDesk)`，成功穿透至使用者活動桌面，`SendInput` 瞬間成功回傳 1，游標在實體螢幕真實位移！
-  * **問題 3（測試掛起懸掛）**：斷言失敗時未清理外部子進程導致 Node.js 測試執行器永遠不退出。解法為一律採用 `try ... finally` 包裹 `await injector.close()`。
+## 📅 2026-10-20 - Ticket 03 Android 端 OTG 鍵鼠獨占捕獲與轉發切片 (全綠)
+* **交付成果**：
+  * 完成 `protocol/android-keycodes.mjs`，建立 100+ 個 Android 原生 KeyCode 與 Windows Virtual-Key (VK) Code 精準對齊字典。
+  * 支援 Windows 核心系統組合鍵（`Win+D`, `Alt+Tab`, `Ctrl+Shift+Esc`）、功能鍵（F1~F12）、方向鍵、NumPad 與符號鍵之雙向無損轉換。
+  * 支援 Android `buttonState` 到 Windows 5 鍵遮罩（左/右/中/側退/側進）與修飾鍵（Meta/Ctrl/Alt/Shift）精準翻譯。
+  * 完成 Android 原生 Kotlin 核心模組 `PacketBuilder.kt` 與 `RawInputCapture.kt`，支援 `requestPointerCapture()` 鎖定與 100% 鍵盤攔截消費。
+  * 完成 Android ➔ PC 雙端 Round-Trip 全鏈路閉環測試，標準測試 `npm test` 13 項測試全綠，Exit Code 0。
 
 
 

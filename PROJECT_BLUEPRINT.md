@@ -25,7 +25,7 @@
 - [x] **M0: 專案沙盒建立與規格落鎖** (已完成)
 - [x] **M1: 雙端二進制通訊協議與 Headless 測試驗證** (npm test 全綠 7/7)
 - [ ] **M2: PC 端 DXGI 畫面捕獲與自適應編碼原型驗證**
-- [x] **M3: PC 端 Win32 SendInput 鍵鼠注入驗證** (Ticket 02 完成 · 6KB 原生橋接 + 9/9 測試全綠)
-- [ ] **M4: Android 端 PointerCapture 與 OTG 鍵鼠攔截轉發**
+- [x] **M3: PC 端 Win32 SendInput 鍵鼠注入驗證** (Ticket 02 完成 · 6KB 原生橋接 + 物理位移硬鎖)
+- [x] **M4: Android 端 PointerCapture 與 OTG 鍵鼠攔截轉發** (Ticket 03 完成 · 100+ 鍵碼精準對齊 + 13/13 測試全綠)
 - [ ] **M5: Android 端 MediaCodec 硬解與雙通道串流整合**
 - [ ] **M6: mDNS 自動尋標與端到端 Live Reality 實體驗收**
