@@ -23,7 +23,7 @@
 
 ## 3. 里程碑切片規劃
 - [x] **M0: 專案沙盒建立與規格落鎖** (已完成)
-- [ ] **M1: 雙端二進制通訊協議與 Headless 測試驗證**
+- [x] **M1: 雙端二進制通訊協議與 Headless 測試驗證** (npm test 全綠 7/7)
 - [ ] **M2: PC 端 DXGI 畫面捕獲與自適應編碼原型驗證**
 - [ ] **M3: PC 端 Win32 SendInput 鍵鼠注入驗證**
 - [ ] **M4: Android 端 PointerCapture 與 OTG 鍵鼠攔截轉發**
