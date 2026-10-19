@@ -14,7 +14,10 @@ export class InputInjector {
     this.exePath = options.exePath || resolve(__dirname, 'native', 'InputBridge.exe');
     this.process = null;
     this.injectedEvents = []; // Mock 模式下的事件記錄
+    this.mockCursor = { x: 500, y: 500 }; // Mock 模式下的游標模擬
     this.isOpen = false;
+    this._stdoutBuffer = Buffer.alloc(0);
+    this._pendingResolvers = [];
   }
 
   /**
@@ -35,9 +38,12 @@ export class InputInjector {
       windowsHide: true
     });
 
-    // 捕獲管道錯誤，防止 EPIPE 變成 uncaughtException
+    this.process.stdout.on('data', (chunk) => {
+      this._stdoutBuffer = Buffer.concat([this._stdoutBuffer, chunk]);
+      this._flushPendingQueries();
+    });
+
     this.process.stdin.on('error', (err) => {
-      // 管道關閉時的預期錯誤，靜音處理
       this.isOpen = false;
     });
 
@@ -52,6 +58,34 @@ export class InputInjector {
     this.isOpen = true;
   }
 
+  _flushPendingQueries() {
+    while (this._pendingResolvers.length > 0 && this._stdoutBuffer.length >= 4) {
+      const resolver = this._pendingResolvers.shift();
+      const x = this._stdoutBuffer.readInt16BE(0);
+      const y = this._stdoutBuffer.readInt16BE(2);
+      this._stdoutBuffer = this._stdoutBuffer.subarray(4);
+      resolver({ x, y });
+    }
+  }
+
+  /**
+   * 獲取真實 Windows 游標座標 (Win32 GetCursorPos)
+   */
+  async getCursorPos() {
+    if (!this.isOpen) return null;
+
+    if (this.mock) {
+      return { ...this.mockCursor };
+    }
+
+    if (!this.process?.stdin?.writable) return null;
+
+    return new Promise((resolve) => {
+      this._pendingResolvers.push(resolve);
+      this.process.stdin.write(Buffer.from([0x00]));
+    });
+  }
+
   /**
    * 注入滑鼠位移與按鈕
    * @param {Buffer|Object} mousePacket 8-Byte Buffer 或滑鼠物件
@@ -61,6 +95,10 @@ export class InputInjector {
       if (this.mock && this.isOpen) {
         const buf = Buffer.isBuffer(mousePacket) ? mousePacket : encodeMouseMove(mousePacket);
         this.injectedEvents.push({ type: PACKET_TYPE.MOUSE_MOVE_REL, raw: buf });
+        if (!Buffer.isBuffer(mousePacket)) {
+          this.mockCursor.x += mousePacket.dx || 0;
+          this.mockCursor.y += mousePacket.dy || 0;
+        }
         return true;
       }
       return false;

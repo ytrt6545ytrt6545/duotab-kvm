@@ -6,9 +6,25 @@ namespace DuoTabKVM.Native
 {
     class Program
     {
-        // Win32 API 定義
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern bool SetThreadDesktop(IntPtr hDesktop);
+
         [DllImport("user32.dll", SetLastError = true)]
         static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool GetCursorPos(out POINT lpPoint);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct POINT
+        {
+            public int X;
+            public int Y;
+        }
 
         const int INPUT_MOUSE = 0;
         const int INPUT_KEYBOARD = 1;
@@ -26,6 +42,7 @@ namespace DuoTabKVM.Native
 
         const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         const uint KEYEVENTF_KEYUP = 0x0002;
+        const uint GENERIC_ALL = 0x10000000;
 
         [StructLayout(LayoutKind.Sequential)]
         struct INPUT
@@ -66,9 +83,23 @@ namespace DuoTabKVM.Native
 
         static byte prevButtons = 0;
 
+        static void EnsureDesktop()
+        {
+            try
+            {
+                IntPtr hDesk = OpenInputDesktop(0, false, GENERIC_ALL);
+                if (hDesk != IntPtr.Zero)
+                {
+                    SetThreadDesktop(hDesk);
+                }
+            }
+            catch { }
+        }
+
         static void Main(string[] args)
         {
-            // 將標準輸入流切換為二進制
+            EnsureDesktop();
+
             using (var stdin = Console.OpenStandardInput())
             using (var stdout = Console.OpenStandardOutput())
             {
@@ -79,7 +110,20 @@ namespace DuoTabKVM.Native
                     if (read <= 0) break; // 管道關閉，安全退出
 
                     byte packetType = header[0];
-                    if (packetType == 0x01) // MOUSE_MOVE_REL (7 bytes 剩餘)
+                    if (packetType == 0x00) // 查詢真實游標座標 (Win32 GetCursorPos)
+                    {
+                        EnsureDesktop();
+                        POINT pt;
+                        GetCursorPos(out pt);
+                        byte[] posBuf = new byte[4];
+                        posBuf[0] = (byte)((pt.X >> 8) & 0xFF);
+                        posBuf[1] = (byte)(pt.X & 0xFF);
+                        posBuf[2] = (byte)((pt.Y >> 8) & 0xFF);
+                        posBuf[3] = (byte)(pt.Y & 0xFF);
+                        stdout.Write(posBuf, 0, 4);
+                        stdout.Flush();
+                    }
+                    else if (packetType == 0x01) // MOUSE_MOVE_REL (7 bytes 剩餘)
                     {
                         byte[] rest = ReadExact(stdin, 7);
                         if (rest == null) break;
@@ -88,7 +132,6 @@ namespace DuoTabKVM.Native
                         short dy = (short)((rest[2] << 8) | rest[3]);
                         sbyte wheel = (sbyte)rest[4];
                         byte buttons = rest[5];
-                        // rest[6] 是 seq
 
                         InjectMouse(dx, dy, wheel, buttons);
                     }
@@ -100,7 +143,6 @@ namespace DuoTabKVM.Native
                         byte action = rest[0]; // 0=UP, 1=DOWN
                         ushort vkCode = (ushort)((rest[1] << 8) | rest[2]);
                         byte modifiers = rest[3];
-                        // rest[4] 是 seq
 
                         InjectKey(action, vkCode);
                     }
@@ -108,8 +150,7 @@ namespace DuoTabKVM.Native
                     {
                         byte[] rest = ReadExact(stdin, 7);
                         if (rest == null) break;
-                        // 回傳 ACK 0x06
-                        stdout.WriteByte(0x06);
+                        stdout.WriteByte(0x06); // ACK
                         stdout.Flush();
                     }
                     else if (packetType == 0xFF) // 急停釋放
@@ -135,30 +176,26 @@ namespace DuoTabKVM.Native
 
         static void InjectMouse(int dx, int dy, int wheel, byte buttons)
         {
+            EnsureDesktop();
             uint flags = 0;
             if (dx != 0 || dy != 0) flags |= MOUSEEVENTF_MOVE;
             if (wheel != 0) flags |= MOUSEEVENTF_WHEEL;
 
-            // 檢查左鍵
             if ((buttons & 0x01) != 0 && (prevButtons & 0x01) == 0) flags |= MOUSEEVENTF_LEFTDOWN;
             if ((buttons & 0x01) == 0 && (prevButtons & 0x01) != 0) flags |= MOUSEEVENTF_LEFTUP;
 
-            // 檢查右鍵
             if ((buttons & 0x02) != 0 && (prevButtons & 0x02) == 0) flags |= MOUSEEVENTF_RIGHTDOWN;
             if ((buttons & 0x02) == 0 && (prevButtons & 0x02) != 0) flags |= MOUSEEVENTF_RIGHTUP;
 
-            // 檢查中鍵
             if ((buttons & 0x04) != 0 && (prevButtons & 0x04) == 0) flags |= MOUSEEVENTF_MIDDLEDOWN;
             if ((buttons & 0x04) == 0 && (prevButtons & 0x04) != 0) flags |= MOUSEEVENTF_MIDDLEUP;
 
-            // 檢查側鍵後退 (XBUTTON1)
             uint mouseData = 0;
             if (wheel != 0) mouseData = (uint)(wheel * 120);
 
             if ((buttons & 0x08) != 0 && (prevButtons & 0x08) == 0) { flags |= MOUSEEVENTF_XDOWN; mouseData = 0x0001; }
             if ((buttons & 0x08) == 0 && (prevButtons & 0x08) != 0) { flags |= MOUSEEVENTF_XUP; mouseData = 0x0001; }
 
-            // 檢查側鍵前進 (XBUTTON2)
             if ((buttons & 0x10) != 0 && (prevButtons & 0x10) == 0) { flags |= MOUSEEVENTF_XDOWN; mouseData = 0x0002; }
             if ((buttons & 0x10) == 0 && (prevButtons & 0x10) != 0) { flags |= MOUSEEVENTF_XUP; mouseData = 0x0002; }
 
@@ -178,10 +215,10 @@ namespace DuoTabKVM.Native
 
         static void InjectKey(byte action, ushort vkCode)
         {
+            EnsureDesktop();
             uint flags = 0;
-            if (action == 0) flags |= KEYEVENTF_KEYUP; // UP
+            if (action == 0) flags |= KEYEVENTF_KEYUP;
 
-            // 延伸鍵處理 (例如右側 Alt/Ctrl, 方向鍵, Win 鍵等)
             if (vkCode == 0x5B || vkCode == 0x5C || (vkCode >= 0x21 && vkCode <= 0x28))
             {
                 flags |= KEYEVENTF_EXTENDEDKEY;
@@ -197,7 +234,6 @@ namespace DuoTabKVM.Native
 
         static void ReleaseAll()
         {
-            // 釋放左中右鍵
             if (prevButtons != 0)
             {
                 InjectMouse(0, 0, 0, 0);
