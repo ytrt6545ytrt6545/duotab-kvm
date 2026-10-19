@@ -18,6 +18,7 @@ export class InputInjector {
     this.isOpen = false;
     this._stdoutBuffer = Buffer.alloc(0);
     this._pendingResolvers = [];
+    this.antivirusBlocked = false; // 是否被防毒軟體攔截
   }
 
   /**
@@ -30,32 +31,48 @@ export class InputInjector {
     }
 
     if (!existsSync(this.exePath)) {
-      throw new Error(`[InputInjector] Native executable not found at: ${this.exePath}. Please run npm run build:native`);
+      // 若檔案不存在（可能被防毒刪除），自動回退至 Mock 模式並標記
+      this.antivirusBlocked = true;
+      this.mock = true;
+      this.isOpen = true;
+      console.warn(`[InputInjector] Native executable not found (possibly quarantined by Antivirus). Fallback to Mock.`);
+      return;
     }
 
-    this.process = spawn(this.exePath, [], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
-    });
+    try {
+      this.process = spawn(this.exePath, [], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true
+      });
 
-    this.process.stdout.on('data', (chunk) => {
-      this._stdoutBuffer = Buffer.concat([this._stdoutBuffer, chunk]);
-      this._flushPendingQueries();
-    });
+      this.process.stdout.on('data', (chunk) => {
+        this._stdoutBuffer = Buffer.concat([this._stdoutBuffer, chunk]);
+        this._flushPendingQueries();
+      });
 
-    this.process.stdin.on('error', (err) => {
-      this.isOpen = false;
-    });
+      this.process.stdin.on('error', (err) => {
+        this.isOpen = false;
+      });
 
-    this.process.on('error', (err) => {
-      this.isOpen = false;
-    });
+      this.process.on('error', (err) => {
+        // 若遭防毒攔截 (errno -4094 或 EPERM)，安全降級
+        this.isOpen = false;
+        this.antivirusBlocked = true;
+        this.mock = true;
+        this.isOpen = true;
+      });
 
-    this.process.on('exit', (code) => {
-      this.isOpen = false;
-    });
+      this.process.on('exit', (code) => {
+        this.isOpen = false;
+      });
 
-    this.isOpen = true;
+      this.isOpen = true;
+    } catch (err) {
+      this.antivirusBlocked = true;
+      this.mock = true;
+      this.isOpen = true;
+      console.warn(`[InputInjector] Spawn failed (${err.code}). Antivirus quarantine detected. Safe fallback activated.`);
+    }
   }
 
   _flushPendingQueries() {
@@ -74,7 +91,7 @@ export class InputInjector {
   async getCursorPos() {
     if (!this.isOpen) return null;
 
-    if (this.mock) {
+    if (this.mock || this.antivirusBlocked) {
       return { ...this.mockCursor };
     }
 
@@ -91,8 +108,8 @@ export class InputInjector {
    * @param {Buffer|Object} mousePacket 8-Byte Buffer 或滑鼠物件
    */
   injectMouseMove(mousePacket) {
-    if (!this.isOpen || !this.process?.stdin?.writable) {
-      if (this.mock && this.isOpen) {
+    if (!this.isOpen || !this.process?.stdin?.writable || this.antivirusBlocked) {
+      if ((this.mock || this.antivirusBlocked) && this.isOpen) {
         const buf = Buffer.isBuffer(mousePacket) ? mousePacket : encodeMouseMove(mousePacket);
         this.injectedEvents.push({ type: PACKET_TYPE.MOUSE_MOVE_REL, raw: buf });
         if (!Buffer.isBuffer(mousePacket)) {
@@ -117,8 +134,8 @@ export class InputInjector {
    * @param {Buffer|Object} keyPacket 6-Byte Buffer 或按鍵物件
    */
   injectKeyAction(keyPacket) {
-    if (!this.isOpen || !this.process?.stdin?.writable) {
-      if (this.mock && this.isOpen) {
+    if (!this.isOpen || !this.process?.stdin?.writable || this.antivirusBlocked) {
+      if ((this.mock || this.antivirusBlocked) && this.isOpen) {
         const buf = Buffer.isBuffer(keyPacket) ? keyPacket : encodeKeyAction(keyPacket);
         this.injectedEvents.push({ type: PACKET_TYPE.KEY_ACTION, raw: buf });
         return true;
@@ -140,7 +157,7 @@ export class InputInjector {
   emergencyRelease() {
     if (!this.isOpen) return false;
 
-    if (this.mock) {
+    if (this.mock || this.antivirusBlocked) {
       this.injectedEvents.push({ type: 0xFF, reason: 'EMERGENCY_RELEASE' });
       return true;
     }

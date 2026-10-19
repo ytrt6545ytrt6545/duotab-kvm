@@ -34,8 +34,21 @@
   * 完成 `protocol/android-keycodes.mjs`，建立 100+ 個 Android 原生 KeyCode 與 Windows Virtual-Key (VK) Code 精準對齊字典。
   * 支援 Windows 核心系統組合鍵（`Win+D`, `Alt+Tab`, `Ctrl+Shift+Esc`）、功能鍵（F1~F12）、方向鍵、NumPad 與符號鍵之雙向無損轉換。
   * 支援 Android `buttonState` 到 Windows 5 鍵遮罩（左/右/中/側退/側進）與修飾鍵（Meta/Ctrl/Alt/Shift）精準翻譯。
-  * 完成 Android 原生 Kotlin 核心模組 `PacketBuilder.kt` 與 `RawInputCapture.kt`，支援 `requestPointerCapture()` 鎖定與 100% 鍵盤攔截消費。
   * 完成 Android ➔ PC 雙端 Round-Trip 全鏈路閉環測試，標準測試 `npm test` 13 項測試全綠，Exit Code 0。
+
+## 📅 2026-10-20 - 深度走查與邊界錯誤修正 (消滅 3 大隱患 + 防毒軟體隔離自癒)
+* **修正錯誤 1（負數滾輪溢出）**：
+  * C# 原生代碼中 `(uint)(wheel * 120)` 當滾輪向下滾動（負數，如 `-1`）時，強制轉型造成符號遺失變成溢出正數 `4294967176`。
+  * 修正：採用 `unchecked((uint)(wheel * 120))` 正確保留負數整數之 32 位補碼，讓 Windows 正確識別向下滾動。
+* **修正錯誤 2（滾輪與側鍵 mouseData 衝突）**：
+  * 原先滾輪與側鍵共用同一 `INPUT` 的 `mouseData` 欄位，導致同時按著側鍵滾動時滾輪被沖掉。
+  * 修正：將滾輪事件與側鍵（XBUTTON1/2）拆分為獨立 `INPUT` 呼叫派發，杜絕數值覆蓋。
+* **修正錯誤 3（Windows 修飾鍵通用碼相容性）**：
+  * 增加 `genericModifiers` 相容模式，將 Android 的 Ctrl/Alt/Shift 映射為標準通用碼 `VK_CONTROL (0x11)`、`VK_MENU (0x12)`、`VK_SHIFT (0x10)`，並在 C# 端為右側 Alt/Ctrl 與方向鍵補齊 `KEYEVENTF_EXTENDEDKEY`。
+* **修正錯誤 4（防毒軟體隔離與自癒）**：
+  * 當本地即時防毒（McAfee Real Protect）攔截並刪除 `InputBridge.exe` 時，`InputInjector.start()` 不再拋出致命崩潰，而是精準捕獲 `errno -4094` 並自動無感啟用安全降級自癒機制。
+  * 標準全域測試 `npm test` 14 項測試全綠，Exit Code 0。
+
 
 
 

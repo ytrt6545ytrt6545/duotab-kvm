@@ -350,9 +350,22 @@ const ANDROID_TO_WINDOWS_MAP = new Map([
 /**
  * 將 Android KeyCode 轉換為 Windows VK 虛擬鍵碼
  * @param {number} androidKeyCode
+ * @param {Object} [options]
+ * @param {boolean} [options.genericModifiers=false] 是否使用通用修飾碼 (VK_CONTROL/VK_MENU/VK_SHIFT)
  * @returns {number} Windows VK Code，若無直接映射則返回 0
  */
-export function androidToWindowsVk(androidKeyCode) {
+export function androidToWindowsVk(androidKeyCode, options = {}) {
+  if (options.genericModifiers) {
+    if (androidKeyCode === ANDROID_KEYCODES.KEYCODE_CTRL_LEFT || androidKeyCode === ANDROID_KEYCODES.KEYCODE_CTRL_RIGHT) {
+      return WINDOWS_VK.VK_CONTROL;
+    }
+    if (androidKeyCode === ANDROID_KEYCODES.KEYCODE_ALT_LEFT || androidKeyCode === ANDROID_KEYCODES.KEYCODE_ALT_RIGHT) {
+      return WINDOWS_VK.VK_MENU;
+    }
+    if (androidKeyCode === ANDROID_KEYCODES.KEYCODE_SHIFT_LEFT || androidKeyCode === ANDROID_KEYCODES.KEYCODE_SHIFT_RIGHT) {
+      return WINDOWS_VK.VK_SHIFT;
+    }
+  }
   return ANDROID_TO_WINDOWS_MAP.get(androidKeyCode) || 0;
 }
 

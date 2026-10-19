@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node --test test/**/*.test.mjs",
     "test:inject": "node server/test-inject-cli.mjs",
-    "build:native": "powershell -Command \"& 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe' /nologo /optimize /platform:anycpu /out:'server/native/InputBridge.exe' 'server/native/InputBridge.cs'\""
+    "build:native": "powershell -Command \"& 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe' /nologo /optimize /platform:anycpu /out:'server\\native\\InputBridge.exe' 'server\\native\\InputBridge.cs'\""
   },
   "keywords": [
     "kvm",

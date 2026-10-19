@@ -147,3 +147,32 @@ test('Android to PC Round-Trip - 全鏈路二進制閉環驗證 (Win+D 注入狀
   const mouseRes = sm.processMouseMove(decodedMouse);
   assert.equal(mouseRes.buttons, BUTTON_MASKS.LEFT | BUTTON_MASKS.MIDDLE);
 });
+
+test('Android Edge Cases - 負數向下滾輪、側鍵複合與未知鍵碼安全回退', (t) => {
+  // 1. 測試向下滾輪 (負數刻度)
+  const negMousePacket = encodeMouseMove({
+    dx: 0,
+    dy: 0,
+    wheel: -5, // 向下滾動 5 刻度
+    buttons: BUTTON_MASKS.BACK, // 同時按著側鍵後退
+    seq: 99
+  });
+  const decodedNeg = decodeMouseMove(negMousePacket);
+  assert.equal(decodedNeg.wheel, -5, '負數滾輪刻度必須精準保留符號，絕不發生 unsigned 溢出');
+  assert.equal(decodedNeg.buttons, BUTTON_MASKS.BACK, '側鍵與滾輪並存時遮罩不得被覆蓋');
+
+  // 2. 測試通用修飾鍵模式 (VK_CONTROL 0x11, VK_MENU 0x12, VK_SHIFT 0x10)
+  const genericCtrl = androidToWindowsVk(ANDROID_KEYCODES.KEYCODE_CTRL_LEFT, { genericModifiers: true });
+  assert.equal(genericCtrl, WINDOWS_VK.VK_CONTROL, '通用模式下 Ctrl 必須映射為 0x11');
+
+  const genericAlt = androidToWindowsVk(ANDROID_KEYCODES.KEYCODE_ALT_RIGHT, { genericModifiers: true });
+  assert.equal(genericAlt, WINDOWS_VK.VK_MENU, '通用模式下 Alt 必須映射為 0x12');
+
+  const genericShift = androidToWindowsVk(ANDROID_KEYCODES.KEYCODE_SHIFT_LEFT, { genericModifiers: true });
+  assert.equal(genericShift, WINDOWS_VK.VK_SHIFT, '通用模式下 Shift 必須映射為 0x10');
+
+  // 3. 測試未知/非標準 Android 鍵碼安全回退
+  const unknownKey = androidToWindowsVk(99999);
+  assert.equal(unknownKey, 0, '未定義鍵碼必須安全回退為 0，絕不拋出例外崩潰');
+});
+

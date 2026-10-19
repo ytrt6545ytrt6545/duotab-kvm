@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
 
 namespace DuoTabKVM.Native
 {
@@ -177,39 +178,83 @@ namespace DuoTabKVM.Native
         static void InjectMouse(int dx, int dy, int wheel, byte buttons)
         {
             EnsureDesktop();
-            uint flags = 0;
-            if (dx != 0 || dy != 0) flags |= MOUSEEVENTF_MOVE;
-            if (wheel != 0) flags |= MOUSEEVENTF_WHEEL;
+            var inputList = new List<INPUT>();
 
-            if ((buttons & 0x01) != 0 && (prevButtons & 0x01) == 0) flags |= MOUSEEVENTF_LEFTDOWN;
-            if ((buttons & 0x01) == 0 && (prevButtons & 0x01) != 0) flags |= MOUSEEVENTF_LEFTUP;
+            // 1. 移動與主要按鍵 (左/右/中)
+            uint mainFlags = 0;
+            if (dx != 0 || dy != 0) mainFlags |= MOUSEEVENTF_MOVE;
+            if ((buttons & 0x01) != 0 && (prevButtons & 0x01) == 0) mainFlags |= MOUSEEVENTF_LEFTDOWN;
+            if ((buttons & 0x01) == 0 && (prevButtons & 0x01) != 0) mainFlags |= MOUSEEVENTF_LEFTUP;
+            if ((buttons & 0x02) != 0 && (prevButtons & 0x02) == 0) mainFlags |= MOUSEEVENTF_RIGHTDOWN;
+            if ((buttons & 0x02) == 0 && (prevButtons & 0x02) != 0) mainFlags |= MOUSEEVENTF_RIGHTUP;
+            if ((buttons & 0x04) != 0 && (prevButtons & 0x04) == 0) mainFlags |= MOUSEEVENTF_MIDDLEDOWN;
+            if ((buttons & 0x04) == 0 && (prevButtons & 0x04) != 0) mainFlags |= MOUSEEVENTF_MIDDLEUP;
 
-            if ((buttons & 0x02) != 0 && (prevButtons & 0x02) == 0) flags |= MOUSEEVENTF_RIGHTDOWN;
-            if ((buttons & 0x02) == 0 && (prevButtons & 0x02) != 0) flags |= MOUSEEVENTF_RIGHTUP;
-
-            if ((buttons & 0x04) != 0 && (prevButtons & 0x04) == 0) flags |= MOUSEEVENTF_MIDDLEDOWN;
-            if ((buttons & 0x04) == 0 && (prevButtons & 0x04) != 0) flags |= MOUSEEVENTF_MIDDLEUP;
-
-            uint mouseData = 0;
-            if (wheel != 0) mouseData = (uint)(wheel * 120);
-
-            if ((buttons & 0x08) != 0 && (prevButtons & 0x08) == 0) { flags |= MOUSEEVENTF_XDOWN; mouseData = 0x0001; }
-            if ((buttons & 0x08) == 0 && (prevButtons & 0x08) != 0) { flags |= MOUSEEVENTF_XUP; mouseData = 0x0001; }
-
-            if ((buttons & 0x10) != 0 && (prevButtons & 0x10) == 0) { flags |= MOUSEEVENTF_XDOWN; mouseData = 0x0002; }
-            if ((buttons & 0x10) == 0 && (prevButtons & 0x10) != 0) { flags |= MOUSEEVENTF_XUP; mouseData = 0x0002; }
-
-            prevButtons = buttons;
-
-            if (flags != 0)
+            if (mainFlags != 0)
             {
                 INPUT input = new INPUT();
                 input.type = INPUT_MOUSE;
                 input.u.mi.dx = dx;
                 input.u.mi.dy = dy;
-                input.u.mi.mouseData = mouseData;
-                input.u.mi.dwFlags = flags;
-                SendInput(1, new INPUT[] { input }, Marshal.SizeOf(typeof(INPUT)));
+                input.u.mi.mouseData = 0;
+                input.u.mi.dwFlags = mainFlags;
+                inputList.Add(input);
+            }
+
+            // 2. 獨立發送滾輪事件 (防 mouseData 衝突，並保留負數符號補碼)
+            if (wheel != 0)
+            {
+                INPUT wheelInput = new INPUT();
+                wheelInput.type = INPUT_MOUSE;
+                wheelInput.u.mi.dx = 0;
+                wheelInput.u.mi.dy = 0;
+                // 正確保留負數整數之 32 位補碼
+                int deltaVal = wheel * 120;
+                wheelInput.u.mi.mouseData = unchecked((uint)deltaVal);
+                wheelInput.u.mi.dwFlags = MOUSEEVENTF_WHEEL;
+                inputList.Add(wheelInput);
+            }
+
+            // 3. 獨立發送側鍵 XBUTTON1 / XBUTTON2 (防 mouseData 覆蓋)
+            if ((buttons & 0x08) != 0 && (prevButtons & 0x08) == 0)
+            {
+                INPUT xDown = new INPUT();
+                xDown.type = INPUT_MOUSE;
+                xDown.u.mi.mouseData = 0x0001; // XBUTTON1
+                xDown.u.mi.dwFlags = MOUSEEVENTF_XDOWN;
+                inputList.Add(xDown);
+            }
+            if ((buttons & 0x08) == 0 && (prevButtons & 0x08) != 0)
+            {
+                INPUT xUp = new INPUT();
+                xUp.type = INPUT_MOUSE;
+                xUp.u.mi.mouseData = 0x0001;
+                xUp.u.mi.dwFlags = MOUSEEVENTF_XUP;
+                inputList.Add(xUp);
+            }
+
+            if ((buttons & 0x10) != 0 && (prevButtons & 0x10) == 0)
+            {
+                INPUT xDown = new INPUT();
+                xDown.type = INPUT_MOUSE;
+                xDown.u.mi.mouseData = 0x0002; // XBUTTON2
+                xDown.u.mi.dwFlags = MOUSEEVENTF_XDOWN;
+                inputList.Add(xDown);
+            }
+            if ((buttons & 0x10) == 0 && (prevButtons & 0x10) != 0)
+            {
+                INPUT xUp = new INPUT();
+                xUp.type = INPUT_MOUSE;
+                xUp.u.mi.mouseData = 0x0002;
+                xUp.u.mi.dwFlags = MOUSEEVENTF_XUP;
+                inputList.Add(xUp);
+            }
+
+            prevButtons = buttons;
+
+            if (inputList.Count > 0)
+            {
+                SendInput((uint)inputList.Count, inputList.ToArray(), Marshal.SizeOf(typeof(INPUT)));
             }
         }
 
@@ -219,7 +264,10 @@ namespace DuoTabKVM.Native
             uint flags = 0;
             if (action == 0) flags |= KEYEVENTF_KEYUP;
 
-            if (vkCode == 0x5B || vkCode == 0x5C || (vkCode >= 0x21 && vkCode <= 0x28))
+            // 延伸鍵處理 (右側 Win, 右側 Alt, 右側 Ctrl, 方向鍵, 翻頁鍵, Insert, Delete)
+            if (vkCode == 0x5B || vkCode == 0x5C || 
+                vkCode == 0xA3 || vkCode == 0xA5 || 
+                (vkCode >= 0x21 && vkCode <= 0x2E))
             {
                 flags |= KEYEVENTF_EXTENDEDKEY;
             }
