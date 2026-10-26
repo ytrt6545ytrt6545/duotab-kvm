@@ -24,8 +24,15 @@
 ## 3. 里程碑切片規劃
 - [x] **M0: 專案沙盒建立與規格落鎖** (已完成)
 - [x] **M1: 雙端二進制通訊協議與 Headless 測試驗證** (npm test 全綠 7/7)
-- [ ] **M2: PC 端 DXGI 畫面捕獲與自適應編碼原型驗證**
-- [x] **M3: PC 端 Win32 SendInput 鍵鼠注入驗證** (Ticket 02 完成 · 6KB 原生橋接 + 物理位移硬鎖)
-- [x] **M4: Android 端 PointerCapture 與 OTG 鍵鼠攔截轉發** (Ticket 03 完成 · 100+ 鍵碼精準對齊 + 13/13 測試全綠)
-- [ ] **M5: Android 端 MediaCodec 硬解與雙通道串流整合**
-- [ ] **M6: mDNS 自動尋標與端到端 Live Reality 實體驗收**
+- [x] **M3: PC 端 Win32 SendInput 鍵鼠注入驗證** (Ticket 02 完成 · 純記憶體反射 0 觸發防毒 + 專屬 WorkerThread 穿透 + 物理位移硬鎖)
+- [x] **M5: PC 端 DXGI 畫面捕獲與自適應編碼原型驗證** (Ticket 04 完成 · 實體 3 螢幕拓撲 + 雙顯卡自適應備援 + ABR 動態調控 + 19/19 測試全綠)
+- [x] **M6: Android 端 MediaCodec 硬解與雙通道串流整合** (Ticket 05 完成 · 無頭 NALU 分幀 + 丟包自癒重傳 + MediaCodec Surface 零拷貝 + 23/23 測試全綠)
+- [x] **M7: mDNS 自動尋標與端到端 Live Reality 實體驗收** (Ticket 06 完成 · 局域網 UDP 自動尋標 + TCP/UDP 雙通道全雙工協調 + 斷線急停防黏鍵 + 25/25 測試全綠)
+
+---
+
+## 4. 低功耗視訊與網路升級里程碑 (Video & Low-Power Upgrade Slices)
+- [x] **Ticket 07: H.264 NALU 封裝協議與雙端二進制合約升級** (Protocol & Constants & Headless 測試 · 32/32 全綠 · Gradle assembleDebug 雙端編譯通過)
+- [x] **Ticket 08: PC 伺服器端 H.264 硬體加速編碼管線實裝** (QSV / NVENC / CPU 自適應鏈 + 淘汰 MJPEG + 36/36 測試全綠)
+- [ ] **Ticket 09: Android 平板端 MediaCodec 零拷貝硬解直出與淘汰軟解** (Surface 直刷 + 徹底消滅發熱與 GC)
+- [ ] **Ticket 10: 弱網自癒看門狗 (Instant IDR Watchdog) 與 ABR 動態調控** (即時關鍵幀插入 + 100ms 破圖自癒)

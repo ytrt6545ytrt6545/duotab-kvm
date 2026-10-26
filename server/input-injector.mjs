@@ -12,17 +12,17 @@ export class InputInjector {
   constructor(options = {}) {
     this.mock = options.mock ?? false;
     this.exePath = options.exePath || resolve(__dirname, 'native', 'InputBridge.exe');
+    this.psScriptPath = options.psScriptPath || resolve(__dirname, 'native', 'bridge.ps1');
     this.process = null;
-    this.injectedEvents = []; // Mock 模式下的事件記錄
-    this.mockCursor = { x: 500, y: 500 }; // Mock 模式下的游標模擬
+    this.injectedEvents = []; // 僅在明確指定 mock: true 時記錄
     this.isOpen = false;
     this._stdoutBuffer = Buffer.alloc(0);
     this._pendingResolvers = [];
-    this.antivirusBlocked = false; // 是否被防毒軟體攔截
   }
 
   /**
    * 初始化並拉起原生輸入進程
+   * 優先使用 PowerShell 原生記憶體宿主（避開防毒軟體對無簽名 EXE 的誤殺）
    */
   async start() {
     if (this.mock) {
@@ -30,57 +30,77 @@ export class InputInjector {
       return;
     }
 
-    if (!existsSync(this.exePath)) {
-      // 若檔案不存在（可能被防毒刪除），自動回退至 Mock 模式並標記
-      this.antivirusBlocked = true;
-      this.mock = true;
-      this.isOpen = true;
-      console.warn(`[InputInjector] Native executable not found (possibly quarantined by Antivirus). Fallback to Mock.`);
-      return;
+    // 判斷啟動方式：若有可信 exe 則用 exe，否則直接以微軟官方簽名 powershell.exe 執行 bridge.ps1
+    let command;
+    let args;
+
+    if (existsSync(this.exePath)) {
+      command = this.exePath;
+      args = [];
+    } else if (existsSync(this.psScriptPath)) {
+      command = 'powershell.exe';
+      args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', this.psScriptPath];
+    } else {
+      throw new Error(`[InputInjector] Neither native executable (${this.exePath}) nor PowerShell bridge (${this.psScriptPath}) found!`);
     }
 
-    try {
-      this.process = spawn(this.exePath, [], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true
+    this.process = spawn(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+
+    this.process.stdout.on('data', (chunk) => {
+      this._stdoutBuffer = Buffer.concat([this._stdoutBuffer, chunk]);
+      this._flushPendingQueries();
+    });
+
+    this.process.stdin.on('error', () => {
+      this.isOpen = false;
+    });
+
+    this.isOpen = false;
+
+    await new Promise((resolveReady, rejectReady) => {
+      let isReady = false;
+      const readyTimer = setTimeout(() => {
+        if (!isReady) {
+          this.isOpen = false;
+          try { this.process?.kill(); } catch (e) {}
+          rejectReady(new Error('[InputInjector] Timed out waiting for [Bridge] Ready signal (10s)'));
+        }
+      }, 10000);
+
+      this.process.stderr.on('data', (chunk) => {
+        const text = chunk.toString();
+        process.stderr.write(text);
+        if (text.includes('[Bridge] Ready')) {
+          isReady = true;
+          this.isOpen = true;
+          clearTimeout(readyTimer);
+          resolveReady();
+        }
       });
 
-      this.process.stdout.on('data', (chunk) => {
-        this._stdoutBuffer = Buffer.concat([this._stdoutBuffer, chunk]);
-        this._flushPendingQueries();
+      this.process.once('error', (err) => {
+        clearTimeout(readyTimer);
+        rejectReady(err);
       });
 
-      this.process.stdin.on('error', (err) => {
-        this.isOpen = false;
+      this.process.once('exit', (code) => {
+        if (!isReady) {
+          clearTimeout(readyTimer);
+          rejectReady(new Error(`[InputInjector] Bridge process exited prematurely with code ${code}`));
+        }
       });
-
-      this.process.on('error', (err) => {
-        // 若遭防毒攔截 (errno -4094 或 EPERM)，安全降級
-        this.isOpen = false;
-        this.antivirusBlocked = true;
-        this.mock = true;
-        this.isOpen = true;
-      });
-
-      this.process.on('exit', (code) => {
-        this.isOpen = false;
-      });
-
-      this.isOpen = true;
-    } catch (err) {
-      this.antivirusBlocked = true;
-      this.mock = true;
-      this.isOpen = true;
-      console.warn(`[InputInjector] Spawn failed (${err.code}). Antivirus quarantine detected. Safe fallback activated.`);
-    }
+    });
   }
 
   _flushPendingQueries() {
-    while (this._pendingResolvers.length > 0 && this._stdoutBuffer.length >= 4) {
+    while (this._pendingResolvers.length > 0 && this._stdoutBuffer.length >= 8) {
       const resolver = this._pendingResolvers.shift();
-      const x = this._stdoutBuffer.readInt16BE(0);
-      const y = this._stdoutBuffer.readInt16BE(2);
-      this._stdoutBuffer = this._stdoutBuffer.subarray(4);
+      const x = this._stdoutBuffer.readInt32BE(0);
+      const y = this._stdoutBuffer.readInt32BE(4);
+      this._stdoutBuffer = this._stdoutBuffer.subarray(8);
       resolver({ x, y });
     }
   }
@@ -89,16 +109,28 @@ export class InputInjector {
    * 獲取真實 Windows 游標座標 (Win32 GetCursorPos)
    */
   async getCursorPos() {
-    if (!this.isOpen) return null;
-
-    if (this.mock || this.antivirusBlocked) {
-      return { ...this.mockCursor };
+    if (!this.isOpen) {
+      throw new Error('[InputInjector] Cannot get cursor position: injector is not open!');
     }
 
-    if (!this.process?.stdin?.writable) return null;
+    if (this.mock) {
+      return null;
+    }
 
-    return new Promise((resolve) => {
-      this._pendingResolvers.push(resolve);
+    if (!this.process?.stdin?.writable) {
+      throw new Error('[InputInjector] Process stdin is not writable!');
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('[InputInjector] GetCursorPos timeout after 1500ms'));
+      }, 1500);
+
+      this._pendingResolvers.push((pos) => {
+        clearTimeout(timeout);
+        resolve(pos);
+      });
+
       this.process.stdin.write(Buffer.from([0x00]));
     });
   }
@@ -108,25 +140,21 @@ export class InputInjector {
    * @param {Buffer|Object} mousePacket 8-Byte Buffer 或滑鼠物件
    */
   injectMouseMove(mousePacket) {
-    if (!this.isOpen || !this.process?.stdin?.writable || this.antivirusBlocked) {
-      if ((this.mock || this.antivirusBlocked) && this.isOpen) {
-        const buf = Buffer.isBuffer(mousePacket) ? mousePacket : encodeMouseMove(mousePacket);
-        this.injectedEvents.push({ type: PACKET_TYPE.MOUSE_MOVE_REL, raw: buf });
-        if (!Buffer.isBuffer(mousePacket)) {
-          this.mockCursor.x += mousePacket.dx || 0;
-          this.mockCursor.y += mousePacket.dy || 0;
-        }
-        return true;
-      }
-      return false;
+    if (!this.isOpen) {
+      throw new Error('[InputInjector] Cannot inject mouse: injector is closed!');
     }
 
     const buf = Buffer.isBuffer(mousePacket) ? mousePacket : encodeMouseMove(mousePacket);
-    try {
-      return this.process.stdin.write(buf);
-    } catch (e) {
-      return false;
+
+    if (this.mock) {
+      this.injectedEvents.push({ type: PACKET_TYPE.MOUSE_MOVE_REL, raw: buf });
+      return true;
     }
+
+    if (this.process?.stdin?.writable) {
+      return this.process.stdin.write(buf);
+    }
+    return false;
   }
 
   /**
@@ -134,21 +162,21 @@ export class InputInjector {
    * @param {Buffer|Object} keyPacket 6-Byte Buffer 或按鍵物件
    */
   injectKeyAction(keyPacket) {
-    if (!this.isOpen || !this.process?.stdin?.writable || this.antivirusBlocked) {
-      if ((this.mock || this.antivirusBlocked) && this.isOpen) {
-        const buf = Buffer.isBuffer(keyPacket) ? keyPacket : encodeKeyAction(keyPacket);
-        this.injectedEvents.push({ type: PACKET_TYPE.KEY_ACTION, raw: buf });
-        return true;
-      }
-      return false;
+    if (!this.isOpen) {
+      throw new Error('[InputInjector] Cannot inject key: injector is closed!');
     }
 
     const buf = Buffer.isBuffer(keyPacket) ? keyPacket : encodeKeyAction(keyPacket);
-    try {
-      return this.process.stdin.write(buf);
-    } catch (e) {
-      return false;
+
+    if (this.mock) {
+      this.injectedEvents.push({ type: PACKET_TYPE.KEY_ACTION, raw: buf });
+      return true;
     }
+
+    if (this.process?.stdin?.writable) {
+      return this.process.stdin.write(buf);
+    }
+    return false;
   }
 
   /**
@@ -157,7 +185,7 @@ export class InputInjector {
   emergencyRelease() {
     if (!this.isOpen) return false;
 
-    if (this.mock || this.antivirusBlocked) {
+    if (this.mock) {
       this.injectedEvents.push({ type: 0xFF, reason: 'EMERGENCY_RELEASE' });
       return true;
     }

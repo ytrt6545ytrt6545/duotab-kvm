@@ -1,19 +1,58 @@
-# 環境變數與機密保險箱
+# =========================================================
+# DuoTab-KVM 專案排除規則 (.gitignore)
+# 嚴格遵循憲法大檔 10TB 原則與安全性原則
+# =========================================================
+
+# 1. 環境變數、憑證與金鑰
 .env
 .env.local
 .env.*.local
 *.pem
 *.key
 
-# 編譯暫存與依賴
-node_modules/
-.next/
+# 2. 二進制安裝包、執行檔與大檔 (大檔 10TB 原則，一律嚴禁入 Git)
 dist/
 build/
-.dart_tool/
-.firebase/
 out/
+bin/
+obj/
+*.exe
+*.dll
+*.apk
+*.aab
+*.zip
+*.tar.gz
+*.7z
 
-# 系統暫存
+# 3. 測試產物與臨時媒體檔案
+temp_test.h264
+screen_test.jpg
+*.h264
+*.mp4
+*.yuv
+*.bmp
+*.jpg
+*.png
+*.log
+
+# 4. Node.js 依賴與快取
+node_modules/
+.npm/
+
+# 5. Android / Gradle 編譯快取與本機配置 (嚴禁上傳本機 SDK 路徑)
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
+
+# 6. 作業系統與編輯器暫存
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.user

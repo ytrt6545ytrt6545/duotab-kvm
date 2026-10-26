@@ -98,6 +98,18 @@ export class InputStateMachine {
   }
 
   /**
+   * 主動觸發急停全鍵釋放
+   */
+  triggerEmergencyRelease() {
+    this.isEmergencyReleased = true;
+    const releaseList = this.generateEmergencyRelease();
+    if (typeof this.onEmergencyRelease === 'function') {
+      this.onEmergencyRelease(releaseList);
+    }
+    return releaseList;
+  }
+
+  /**
    * 生成所有當前按住的鍵盤與滑鼠釋放清單
    */
   generateEmergencyRelease() {
