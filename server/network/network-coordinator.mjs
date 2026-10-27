@@ -9,14 +9,15 @@ import { decodeHeartbeat, decodeStreamControl, decodeMouseMove, decodeKeyAction 
 import { InputStateMachine } from '../../protocol/input-state-machine.mjs';
 import { InputInjector } from '../input-injector.mjs';
 import { ScreenCaptureManager } from '../capture/screen-capture-manager.mjs';
+import { ProcessPerfMonitor } from '../capture/perf-monitor.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const STREAM_TIERS = {
-  1: { width: 854, bitrateKbps: 1800, fps: 60, q: '26', name: '低畫質 (480p, 1.8Mbps, 60fps 省電保底)' },
-  2: { width: 1280, bitrateKbps: 3500, fps: 60, q: '22', name: '中畫質 (720p, 3.5Mbps, 60fps 最佳平衡)' },
-  3: { width: 1920, bitrateKbps: 6500, fps: 60, q: '18', name: '高畫質 (1080p, 6.5Mbps, 60fps 原畫細緻)' }
+  1: { width: 854, bitrateKbps: 1800, fps: 30, q: '26', name: '低畫質 (480p, 1.8Mbps, 30fps 省電保底)' },
+  2: { width: 1280, bitrateKbps: 3500, fps: 30, q: '22', name: '中畫質 (720p, 3.5Mbps, 30fps 最佳平衡)' },
+  3: { width: 1920, bitrateKbps: 6500, fps: 30, q: '18', name: '高畫質 (1080p, 6.5Mbps, 30fps 原畫細緻)' }
 };
 
 /**
@@ -32,6 +33,7 @@ export class NetworkCoordinator {
     this.inputInjector = options.inputInjector || new InputInjector(options);
     this.inputStateMachine = options.inputStateMachine || new InputStateMachine(options);
     this.captureManager = options.captureManager || new ScreenCaptureManager(options);
+    this.perfMonitor = options.perfMonitor || new ProcessPerfMonitor(options);
 
     this.tcpServer = null;
     this.videoServer = null;
@@ -58,13 +60,23 @@ export class NetworkCoordinator {
     this._cachedConfigNalus = new Map(); // 相容舊版: streamRole -> NALU (SPS/PPS)
     this._cachedKeyframes = new Map();   // streamRole -> NALU (IDR Type 5)
     this._currentSeq = 0;
+
+    // 綁定動態降載狀態機瞬間喚醒回調
+    if (this.captureManager?.idleThrottler) {
+      this.captureManager.idleThrottler.onWakeup = ({ fromState }) => {
+        if (fromState === 'FROZEN' && this._currentStreamRole) {
+          this.requestIdr(this._currentStreamRole);
+        }
+      };
+    }
   }
 
   /**
    * 啟動 TCP 控制服務、TCP 獨立視訊服務與 UDP 低延遲輸入接收 (三網解耦架構)
    */
   async start() {
-    // 1. 初始化底層輸入注入器與畫面捕獲拓撲
+    // 1. 初始化底層輸入注入器與畫面捕獲拓撲，並啟動性能監控
+    this.perfMonitor.start();
     if (!this.inputInjector.isOpen) {
       await this.inputInjector.start();
     }
@@ -330,6 +342,7 @@ export class NetworkCoordinator {
         packetLoss: isIdrRequested ? 0.08 : 0
       });
     } else if (type === PACKET_TYPE.MOUSE_MOVE_REL) {
+      this.captureManager?.recordUserActivity();
       const mouseEvt = decodeMouseMove(packet);
       this.inputStateMachine.processMouseMove(mouseEvt);
       this.inputInjector.injectMouseMove(packet);
@@ -340,6 +353,7 @@ export class NetworkCoordinator {
         this._lastMouseLog = now;
       }
     } else if (type === PACKET_TYPE.KEY_ACTION) {
+      this.captureManager?.recordUserActivity();
       const keyEvt = decodeKeyAction(packet);
       this.inputStateMachine.processKeyAction(keyEvt);
       this.inputInjector.injectKeyAction(packet);
@@ -380,8 +394,12 @@ export class NetworkCoordinator {
       const channelLabel = targetSocket === this.videoSocket ? '獨立視訊通道 (Port 5859)' : '控制混流通道 (Port 5858)';
 
       const backend = this.captureManager.activeEncoder?.backend || 'software';
+      const captureSource = this.captureManager.captureSource || 'gdigrab';
+      const outputIndex = targetScreen.index ?? 0;
       const args = this.captureManager.encoderAdapter.buildFFmpegArgs({
         backend,
+        captureSource,
+        outputIndex,
         width,
         height,
         offsetX,
@@ -398,6 +416,9 @@ export class NetworkCoordinator {
         env: { ...process.env, __COMPAT_LAYER: 'HighDpiAware' }
       });
       this._captureProcess = currentProcess;
+      if (currentProcess?.pid) {
+        this.perfMonitor.setTargetPid(currentProcess.pid);
+      }
 
       console.log(`[DuoTab-VIDEO] 📺 官方 FFmpeg H.264 桌面串流已啟動 (${screenLabel} | ${tierConfig.name} ➔ ${scaleW}x${scaleH} [${backend}] | 經由: ${channelLabel})，開始推送畫面...`);
 
@@ -534,8 +555,9 @@ export class NetworkCoordinator {
             const backlogKb = (backlog / 1024).toFixed(1);
             const maxBacklogKb = (maxBacklog / 1024).toFixed(0);
             const healthLight = backlog === 0 ? '🟢 極度流暢' : backlog < (maxBacklog / 2) ? '🟡 緩衝良好' : '🔴 輕微擁塞';
+            const perf = this.perfMonitor?.getMetrics() || { cpuPercent: '--', gpuPercent: '--' };
 
-            console.log(`[DuoTab-STREAM-HUD] 📊 [T${this._currentStreamTier}] 推流: ${currentFps} FPS | 碼率: ${mbps} Mbps | 單幀: ${avgFrameKb} KB | TCP排隊: ${backlogKb}/${maxBacklogKb} KB | 丟幀: ${droppedFrames} (+${secDroppedFrames}/s) (${healthLight})`);
+            console.log(`[DuoTab-STREAM-HUD] 📊 [T${this._currentStreamTier}] 推流: ${currentFps} FPS | 碼率: ${mbps} Mbps | FFmpeg CPU: ${perf.cpuPercent}% | GPU: ${perf.gpuPercent}% | 單幀: ${avgFrameKb} KB | TCP排隊: ${backlogKb}/${maxBacklogKb} KB | 丟幀: ${droppedFrames} (+${secDroppedFrames}/s) (${healthLight})`);
 
             secDroppedFrames = 0;
 
@@ -583,15 +605,27 @@ export class NetworkCoordinator {
       currentProcess.on('exit', (code, signal) => {
         if (code !== 0 && code !== null) {
           console.warn(`[DuoTab-FFMPEG-EXIT] ⚠️ FFmpeg 進程已退出: code=${code}, signal=${signal}`);
+          // 🛡️ 自癒保險絲：若當前為 ddagrab 且異常退出，平滑降級為 GDI 備援驅動重啟串流
+          if (this.captureManager?.captureSource === 'ddagrab') {
+            console.warn(`[DuoTab-RESILIENCE] 🛡️ 顯存原生捕獲異常退出，平滑降級為 GDI 備援驅動重啟串流...`);
+            this.captureManager.captureSource = 'gdigrab';
+            if (this._currentStreamRole && !this._isStreamPaused && targetSocket && !targetSocket.destroyed) {
+              setTimeout(() => {
+                this._startScreenStreaming(targetSocket, this._currentStreamTier || 2, true, this._currentStreamRole);
+              }, 500);
+            }
+          }
         }
         if (this._captureProcess === currentProcess) {
           this._captureProcess = null;
+          this.perfMonitor?.setTargetPid(null);
         }
       });
       currentProcess.on('error', (err) => {
         console.error(`[DuoTab-FFMPEG-ERR] 🔴 FFmpeg 啟動異常: ${err.message}`);
         if (this._captureProcess === currentProcess) {
           this._captureProcess = null;
+          this.perfMonitor?.setTargetPid(null);
         }
       });
     } catch (e) {
@@ -600,6 +634,7 @@ export class NetworkCoordinator {
   }
 
   _stopScreenStreaming() {
+    this.perfMonitor?.setTargetPid(null);
     if (this._captureProcess) {
       try { this._captureProcess.kill(); } catch (e) {}
       this._captureProcess = null;
@@ -616,6 +651,7 @@ export class NetworkCoordinator {
     }
 
     const type = msg[0];
+    this.captureManager?.recordUserActivity();
     if (type === PACKET_TYPE.MOUSE_MOVE_REL) {
       if (msg.length >= PACKET_SIZE[PACKET_TYPE.MOUSE_MOVE_REL]) {
         const mouseEvt = decodeMouseMove(msg);
@@ -701,6 +737,7 @@ export class NetworkCoordinator {
   async stop() {
     this.isListening = false;
     this._stopScreenStreaming();
+    this.perfMonitor?.stop();
 
     // 主動關閉所有現存連線以防 tcpServer.close 卡住
     for (const socket of this._activeSockets) {

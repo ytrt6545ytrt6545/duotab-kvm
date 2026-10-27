@@ -9,6 +9,11 @@ export const ENCODER_BACKEND = {
   SOFTWARE: 'software'    // CPU 軟體備援 (OpenH264 / x264)
 };
 
+export const CAPTURE_SOURCE = {
+  DDAGRAB: 'ddagrab',     // Windows 原生 D3D11 Desktop Duplication (GPU 零拷貝顯存原生捕獲，近乎 0% CPU)
+  GDIGRAB: 'gdigrab'      // Windows GDI 傳統截圖 (全相容備援)
+};
+
 export const STREAM_QUALITY_PROFILE = {
   ULTRA_LOW_LATENCY: {
     gopSize: 30,          // 關鍵幀間隔 (半秒 1 個 IDR)

@@ -6,6 +6,7 @@ rem =========================================================
 cd /d "%~dp0"
 title DuoTab-KVM Host Setup Wizard
 
+chcp 65001 >nul
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\setup-host-prerequisites.ps1"
 if %ERRORLEVEL% NEQ 0 (
     echo.

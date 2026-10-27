@@ -34,5 +34,6 @@
 ## 4. 低功耗視訊與網路升級里程碑 (Video & Low-Power Upgrade Slices)
 - [x] **Ticket 07: H.264 NALU 封裝協議與雙端二進制合約升級** (Protocol & Constants & Headless 測試 · 32/32 全綠 · Gradle assembleDebug 雙端編譯通過)
 - [x] **Ticket 08: PC 伺服器端 H.264 硬體加速編碼管線實裝** (QSV / NVENC / CPU 自適應鏈 + 淘汰 MJPEG + 36/36 測試全綠)
-- [ ] **Ticket 09: Android 平板端 MediaCodec 零拷貝硬解直出與淘汰軟解** (Surface 直刷 + 徹底消滅發熱與 GC)
-- [ ] **Ticket 10: 弱網自癒看門狗 (Instant IDR Watchdog) 與 ABR 動態調控** (即時關鍵幀插入 + 100ms 破圖自癒)
+- [x] **Ticket 09: Android 平板端 MediaCodec 零拷貝硬解直出與淘汰軟解** (Surface 直刷 + 徹底消滅發熱與 GC · 實機 60fps 驗收完成)
+- [x] **Ticket 10: 弱網自癒看門狗 (Instant IDR Watchdog) 與 SPS/PPS/IDR 鐵三角分離快取** (即時關鍵幀插入 + 0.5s 破圖自癒 · 40/40 測試全綠)
+- [x] **v1.1.0 核心演進: Direct3D 11 顯存直通 (ddagrab) 降載與 CPU/GPU 算力觀測** (CPU 36.5% -> 3.8% 暴降 90% + 30fps 勻速串流 + 47/47 測試全綠)

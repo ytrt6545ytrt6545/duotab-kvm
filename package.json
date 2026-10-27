@@ -1,6 +1,6 @@
 {
   "name": "duotab-kvm",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Ultra-low latency dual Android tablet workspace system for Windows 10/11",
   "type": "module",
   "main": "server/index.mjs",

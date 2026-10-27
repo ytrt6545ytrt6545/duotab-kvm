@@ -40,8 +40,9 @@ test('DiscoveryService - 局域網 UDP 自動尋標探測與即時回應', async
 test('NetworkCoordinator - 雙平板雙角色獨立綁定與全鏈路輸入穿透', async (t) => {
   // 建立網路協調器 (指定獨立測試端口以防碰撞，使用 mock: true 驗證邏輯接縫)
   const coordinator = new NetworkCoordinator({
-    tcpPort: 15860,
-    udpPort: 15860,
+    tcpPort: 15870,
+    videoPort: 15871,
+    udpPort: 15870,
     mock: true
   });
 
@@ -54,7 +55,7 @@ test('NetworkCoordinator - 雙平板雙角色獨立綁定與全鏈路輸入穿�
 
   try {
     // 1. 模擬 Console 平板 TCP 連線並發送心跳握手
-    consoleSocket = net.connect(15860, '127.0.0.1');
+    consoleSocket = net.connect(15870, '127.0.0.1');
     await new Promise(r => consoleSocket.once('connect', r));
 
     const hbConsole = encodeHeartbeat({ role: CLIENT_ROLE.CONSOLE, leaseMs: 1500, timestamp: Date.now() });
@@ -66,7 +67,7 @@ test('NetworkCoordinator - 雙平板雙角色獨立綁定與全鏈路輸入穿�
     assert.equal(coordinator.clients.display, null, 'Display 平板此時應為空');
 
     // 2. 模擬 Display 平板 TCP 連線並發送心跳握手
-    displaySocket = net.connect(15860, '127.0.0.1');
+    displaySocket = net.connect(15870, '127.0.0.1');
     await new Promise(r => displaySocket.once('connect', r));
 
     const hbDisplay = encodeHeartbeat({ role: CLIENT_ROLE.DISPLAY, leaseMs: 1500, timestamp: Date.now() });
@@ -80,7 +81,7 @@ test('NetworkCoordinator - 雙平板雙角色獨立綁定與全鏈路輸入穿�
     udpClient = dgram.createSocket('udp4');
     const mousePacket = encodeMouseMove({ dx: 25, dy: -15, wheel: 0, buttons: BUTTON_MASKS.LEFT, seq: 1 });
 
-    udpClient.send(mousePacket, 15860, '127.0.0.1');
+    udpClient.send(mousePacket, 15870, '127.0.0.1');
     await new Promise(r => setTimeout(r, 60));
 
     // 驗證狀態機與注入器是否完整捕獲事件

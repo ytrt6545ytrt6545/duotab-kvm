@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EncoderAdapter } from '../server/capture/encoder-adapter.mjs';
-import { ENCODER_BACKEND } from '../server/capture/capture-constants.mjs';
+import { ENCODER_BACKEND, CAPTURE_SOURCE } from '../server/capture/capture-constants.mjs';
 import { STREAM_TIERS } from '../server/network/network-coordinator.mjs';
 import { PACKET_TYPE, STREAM_MAGIC, H264_FRAME_FLAGS, NALU_TYPE } from '../protocol/constants.mjs';
 import { decodeH264Frame } from '../protocol/packet-codec.mjs';
@@ -67,30 +67,59 @@ test('EncoderAdapter - 全後端 FFmpeg 零延遲參數矩陣校驗 (NVENC, QSV,
   assert.ok(cpuArgs.includes('-profile:v') && cpuArgs[cpuArgs.indexOf('-profile:v') + 1] === 'baseline');
 });
 
+test('EncoderAdapter - GPU 顯存原生捕獲源 (ddagrab vs gdigrab) 參數矩陣校驗', (t) => {
+  const adapter = new EncoderAdapter();
+
+  // 1. 指定 DDAGRAB 顯存原生捕獲
+  const ddaArgs = adapter.buildFFmpegArgs({
+    backend: ENCODER_BACKEND.QSV,
+    captureSource: CAPTURE_SOURCE.DDAGRAB,
+    outputIndex: 1,
+    scaleW: 1280,
+    scaleH: 720,
+    fps: 60,
+    bitrateKbps: 3500
+  });
+  assert.ok(ddaArgs.includes('-f') && ddaArgs[ddaArgs.indexOf('-f') + 1] === 'lavfi');
+  assert.ok(ddaArgs.some(arg => arg.includes('ddagrab=output_idx=1')));
+  assert.ok(!ddaArgs.includes('gdigrab'), 'DDAGRAB 模式不得包含 gdigrab');
+
+  // 2. 指定 GDIGRAB 傳統相容截圖
+  const gdiArgs = adapter.buildFFmpegArgs({
+    backend: ENCODER_BACKEND.QSV,
+    captureSource: CAPTURE_SOURCE.GDIGRAB,
+    scaleW: 1280,
+    scaleH: 720,
+    fps: 60
+  });
+  assert.ok(gdiArgs.includes('-f') && gdiArgs[gdiArgs.indexOf('-f') + 1] === 'gdigrab');
+  assert.ok(!gdiArgs.includes('lavfi'));
+});
+
 test('EncoderAdapter - 畫質階梯 (STREAM_TIERS) 與碼率參數精確映射', (t) => {
   const adapter = new EncoderAdapter();
 
-  // Tier 1: 480p, 1.8Mbps, 60fps
+  // Tier 1: 480p, 1.8Mbps, 30fps
   const t1 = STREAM_TIERS[1];
   assert.equal(t1.width, 854);
   assert.equal(t1.bitrateKbps, 1800);
-  assert.equal(t1.fps, 60);
+  assert.equal(t1.fps, 30);
   const args1 = adapter.buildFFmpegArgs({ scaleW: t1.width, fps: t1.fps, bitrateKbps: t1.bitrateKbps });
   assert.ok(args1.some(arg => arg.includes(`scale=${t1.width}:360:flags=fast_bilinear`)));
   assert.ok(args1.some(arg => arg.includes(`fps=fps=${t1.fps}`)));
   assert.ok(args1.includes('1800k'));
 
-  // Tier 2: 720p, 3.5Mbps, 60fps
+  // Tier 2: 720p, 3.5Mbps, 30fps
   const t2 = STREAM_TIERS[2];
   assert.equal(t2.width, 1280);
   assert.equal(t2.bitrateKbps, 3500);
-  assert.equal(t2.fps, 60);
+  assert.equal(t2.fps, 30);
 
-  // Tier 3: 1080p, 6.5Mbps, 60fps
+  // Tier 3: 1080p, 6.5Mbps, 30fps
   const t3 = STREAM_TIERS[3];
   assert.equal(t3.width, 1920);
   assert.equal(t3.bitrateKbps, 6500);
-  assert.equal(t3.fps, 60);
+  assert.equal(t3.fps, 30);
 });
 
 test('H.264 串流管道 - Annex-B 切幀狀態機與 9-Byte Header 封裝驗證', (t) => {

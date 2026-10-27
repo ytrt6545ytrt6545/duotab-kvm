@@ -1,18 +1,52 @@
 import { execSync } from 'node:child_process';
-import { ENCODER_BACKEND, STREAM_QUALITY_PROFILE } from './capture-constants.mjs';
+import { ENCODER_BACKEND, CAPTURE_SOURCE, STREAM_QUALITY_PROFILE } from './capture-constants.mjs';
 
 /**
  * GPU 硬體編碼階梯探針與自適應調度器
  * 依序探測 NVENC -> QSV -> AMF -> SOFTWARE，保證跨硬體主機 100% 自適應平滑備援
  */
 let _globalCachedBackends = null;
+let _globalCachedCaptureSource = null;
 
 export class EncoderAdapter {
   constructor(options = {}) {
     this.preferredBackend = options.preferredBackend || null;
+    this.preferredCaptureSource = options.preferredCaptureSource || null;
     this.supportedBackends = options.supportedBackends || null; // 支援外部注入或測試接縫
     this.activeBackend = null;
+    this.activeCaptureSource = null;
     this.history = [];
+  }
+
+  /**
+   * 探測並確認當前系統最佳螢幕擷取驅動源 (優先 DXGI ddagrab 顯存直通，異常時平滑備援至 gdigrab)
+   */
+  async probeCaptureSource() {
+    if (this.preferredCaptureSource) {
+      this.activeCaptureSource = this.preferredCaptureSource;
+      return this.preferredCaptureSource;
+    }
+    if (_globalCachedCaptureSource) {
+      this.activeCaptureSource = _globalCachedCaptureSource;
+      return _globalCachedCaptureSource;
+    }
+
+    // 透過 1 幀微探針驗證當前桌面 Session 是否具備 DXGI Desktop Duplication 授權
+    let source = CAPTURE_SOURCE.GDIGRAB;
+    try {
+      execSync('ffmpeg -hide_banner -f lavfi -i ddagrab=framerate=1 -frames:v 1 -f null -', {
+        stdio: 'ignore',
+        timeout: 3000
+      });
+      source = CAPTURE_SOURCE.DDAGRAB;
+    } catch {
+      // 遇到權限受限或特殊虛擬驅動環境，平滑回退至 GDI 傳統截圖
+      source = CAPTURE_SOURCE.GDIGRAB;
+    }
+
+    this.activeCaptureSource = source;
+    _globalCachedCaptureSource = source;
+    return source;
   }
 
   /**
@@ -129,39 +163,52 @@ export class EncoderAdapter {
    */
   buildFFmpegArgs(options = {}) {
     const backend = options.backend || this.activeBackend || ENCODER_BACKEND.SOFTWARE;
+    const captureSource = options.captureSource || this.activeCaptureSource || CAPTURE_SOURCE.GDIGRAB;
     const width = options.width || 1920;
     const height = options.height || 1080;
     const offsetX = options.offsetX || 0;
     const offsetY = options.offsetY || 0;
+    const outputIndex = options.outputIndex ?? 0;
     const scaleW = options.scaleW || 640;
     const scaleH = options.scaleH || 360;
-    const fps = options.fps || 60;
+    const fps = options.fps || 30;
     const bitrateKbps = options.bitrateKbps || 2000;
     const gopSize = options.gopSize || 30;
 
     const args = [
       '-loglevel', 'error',
-      '-thread_queue_size', '1',
-      '-f', 'gdigrab',
-      '-draw_mouse', '1',
-      '-framerate', `${fps}`
+      '-thread_queue_size', '1'
     ];
 
-    // 永遠明確指定 offset 與 video_size，鎖定單一實體螢幕幾何，絕不抓取全域多螢幕龐大虛擬桌面 (例如 4640x1080)
-    args.push(
-      '-offset_x', `${offsetX}`,
-      '-offset_y', `${offsetY}`,
-      '-video_size', `${width}x${height}`,
-      '-i', 'desktop'
-    );
+    if (captureSource === CAPTURE_SOURCE.DDAGRAB) {
+      // GPU 顯存原生捕獲模式 (Desktop Duplication API，近乎 0% CPU 開銷)
+      args.push(
+        '-f', 'lavfi',
+        '-i', `ddagrab=output_idx=${outputIndex}:draw_mouse=1:framerate=${fps}:offset_x=${offsetX}:offset_y=${offsetY}:video_size=${width}x${height}`
+      );
+    } else {
+      // GDI 傳統截圖模式 (全環境相容備援)
+      args.push(
+        '-f', 'gdigrab',
+        '-draw_mouse', '1',
+        '-framerate', `${fps}`,
+        '-offset_x', `${offsetX}`,
+        '-offset_y', `${offsetY}`,
+        '-video_size', `${width}x${height}`,
+        '-i', 'desktop'
+      );
+    }
 
     // 嚴格計算 VBV 緩衝區：保證單幀平滑，單幀上限不得超過 35KB
     const vbvBufSize = Math.max(300, Math.round(bitrateKbps / 8));
 
+    // 當使用 ddagrab 時，輸出為 d3d11 顯存表面，必須透過 hwdownload,format=bgra 橋接至後續色彩格式與縮放濾鏡
+    const filterPrefix = (captureSource === CAPTURE_SOURCE.DDAGRAB) ? 'hwdownload,format=bgra,' : '';
+
     switch (backend) {
       case ENCODER_BACKEND.NVENC:
         args.push(
-          '-vf', `fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=yuv420p`,
+          '-vf', `${filterPrefix}fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=yuv420p`,
           '-c:v', 'h264_nvenc',
           '-preset', 'p1',
           '-tune', 'ull',
@@ -181,7 +228,7 @@ export class EncoderAdapter {
 
       case ENCODER_BACKEND.QSV:
         args.push(
-          '-vf', `fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=nv12`,
+          '-vf', `${filterPrefix}fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=nv12`,
           '-c:v', 'h264_qsv',
           '-scenario', 'displayremoting',
           '-low_power', '1',
@@ -203,7 +250,7 @@ export class EncoderAdapter {
 
       case ENCODER_BACKEND.AMF:
         args.push(
-          '-vf', `fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=yuv420p`,
+          '-vf', `${filterPrefix}fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=yuv420p`,
           '-c:v', 'h264_amf',
           '-usage', 'ultralowlatency',
           '-b:v', `${bitrateKbps}k`,
@@ -219,7 +266,7 @@ export class EncoderAdapter {
       case ENCODER_BACKEND.SOFTWARE:
       default:
         args.push(
-          '-vf', `fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=yuv420p`,
+          '-vf', `${filterPrefix}fps=fps=${fps},scale=${scaleW}:${scaleH}:flags=fast_bilinear,format=yuv420p`,
           '-c:v', 'libx264',
           '-preset', 'ultrafast',
           '-tune', 'zerolatency',

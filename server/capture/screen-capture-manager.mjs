@@ -1,6 +1,7 @@
 import { TopologyProbe } from './topology-probe.mjs';
 import { EncoderAdapter } from './encoder-adapter.mjs';
 import { AbrController } from './abr-controller.mjs';
+import { IdleThrottler } from './idle-throttler.mjs';
 
 /**
  * DuoTab-KVM PC 端畫面捕獲與自適應串流總管理器
@@ -14,7 +15,11 @@ export class ScreenCaptureManager {
     this.consoleAbr = new AbrController(options);
     this.displayAbr = new AbrController(options);
 
+    // 靜態畫面動態降幀與節能狀態機
+    this.idleThrottler = options.idleThrottler || new IdleThrottler(options);
+
     this.activeEncoder = null;
+    this.captureSource = null;
     this.topology = null;
     this.isCapturing = false;
   }
@@ -26,7 +31,10 @@ export class ScreenCaptureManager {
     // 1. 探測實體螢幕拓撲
     this.topology = this.topologyProbe.getDualScreenTopology();
 
-    // 2. 探測並選取最佳 GPU 硬體編碼器
+    // 2. 探測最佳 GPU 顯存原生捕獲源 (ddagrab / gdigrab)
+    this.captureSource = await this.encoderAdapter.probeCaptureSource();
+
+    // 3. 探測並選取最佳 GPU 硬體編碼器
     this.activeEncoder = await this.encoderAdapter.resolveEncoder();
 
     this.isCapturing = true;
@@ -34,8 +42,23 @@ export class ScreenCaptureManager {
     return {
       topology: this.topology,
       encoder: this.activeEncoder,
+      captureSource: this.captureSource,
       isDualScreen: this.topology.hasDualScreens
     };
+  }
+
+  /**
+   * 記錄使用者輸入操作，瞬間喚醒降幀狀態機至 60 FPS
+   */
+  recordUserActivity() {
+    this.idleThrottler.recordActivity();
+  }
+
+  /**
+   * 判定當前視頻影格是否應動態丟棄以節省 GPU/網路開銷
+   */
+  shouldDropFrame(isKeyframe = false) {
+    return this.idleThrottler.shouldDropFrame(isKeyframe);
   }
 
   /**
